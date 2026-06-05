@@ -16,6 +16,12 @@ Getting started (example):
 python src\inference.py --config configs\config.yaml --video data\input.mp4 --model models\LRCN_model.h5 --output outputs\result.mp4
 ```
 
+- If you don't have the detector/LRCN dependencies installed, use `--dry_run` to validate the pipeline end-to-end without those heavy packages:
+
+```powershell
+python src\inference.py --dry_run --output outputs\dryrun.mp4
+```
+
 Notes about repository hygiene:
 - The existing model file at the repo root is currently tracked; if you move it into `models/` you should untrack the old file with:
 

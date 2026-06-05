@@ -36,6 +36,7 @@ def parse_args():
     p.add_argument('--output', default=None, help='Output video path')
     p.add_argument('--seq_len', type=int, default=None)
     p.add_argument('--conf', type=float, default=None)
+    p.add_argument('--dry_run', action='store_true', help='Run a lightweight dry-run without detector/LRCN')
     return p.parse_args()
 
 
@@ -50,12 +51,16 @@ def main():
     seq_len = args.seq_len or cfg.get('inference', {}).get('seq_len', 30)
     conf_thr = args.conf or cfg.get('inference', {}).get('conf_threshold', 0.3)
 
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    output_dir = os.path.dirname(output_path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
 
-    # Load detector
-    if YOLO is None:
-        raise RuntimeError('ultralytics YOLO is not available in this environment')
-    detector = YOLO(detector_weights) if detector_weights else None
+    # Load detector only for real inference. Dry-run must not trigger downloads.
+    detector = None
+    if not args.dry_run:
+        if YOLO is None:
+            raise RuntimeError('ultralytics YOLO is not available in this environment')
+        detector = YOLO(detector_weights) if detector_weights else None
 
     # Load LRCN if available
     lrcn = None
@@ -67,13 +72,21 @@ def main():
 
     tracker = Sort(max_age=30, min_hits=3, iou_threshold=0.3)
 
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        raise RuntimeError(f'Cannot open video: {video_path}')
-
-    frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = max(1, int(cap.get(cv2.CAP_PROP_FPS) or 10))
+    # Dry-run mode: synthesize frames and simulated detections to validate pipeline
+    if args.dry_run:
+        print('Running dry-run: no detector or LRCN will be used. Generating synthetic frames.')
+        cap = None
+        frame_w, frame_h = 640, 480
+        fps = 10
+        total_frames = 100
+    else:
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise RuntimeError(f'Cannot open video: {video_path}')
+        frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = max(1, int(cap.get(cv2.CAP_PROP_FPS) or 10))
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
 
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_path, fourcc, fps, (frame_w, frame_h))
@@ -83,25 +96,36 @@ def main():
     frame_idx = 0
     records = []
 
+    # Main loop: either process video frames or synthesize frames in dry-run
     while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
         frame_idx += 1
+        if args.dry_run:
+            if frame_idx > total_frames:
+                break
+            # synthesize a blank frame and a moving box
+            frame = np.zeros((frame_h, frame_w, 3), dtype=np.uint8)
+            # moving box parameters
+            cx = 50 + (frame_idx * 5) % (frame_w - 100)
+            cy = 50 + (frame_idx * 2) % (frame_h - 100)
+            x1, y1, x2, y2 = cx, cy, cx + 80, cy + 140
+            detections = np.array([[x1, y1, x2, y2, 0.9]])
+        else:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            detections = np.empty((0, 5))
 
-        detections = np.empty((0, 5))
-
-        results = detector(frame)
-        for r in results:
-            for box in r.boxes:
-                x1, y1, x2, y2 = box.xyxy[0].tolist()
-                x1, y1, x2, y2 = map(int, (x1, y1, x2, y2))
-                conf = float(box.conf[0])
-                cls = int(box.cls[0])
-                # only persons
-                if cls == 0 and conf >= conf_thr:
-                    row = np.array([x1, y1, x2, y2, conf])
-                    detections = np.vstack((detections, row))
+            results = detector(frame)
+            for r in results:
+                for box in r.boxes:
+                    x1, y1, x2, y2 = box.xyxy[0].tolist()
+                    x1, y1, x2, y2 = map(int, (x1, y1, x2, y2))
+                    conf = float(box.conf[0])
+                    cls = int(box.cls[0])
+                    # only persons
+                    if cls == 0 and conf >= conf_thr:
+                        row = np.array([x1, y1, x2, y2, conf])
+                        detections = np.vstack((detections, row))
 
         tracks = tracker.update(detections)
 
@@ -148,10 +172,12 @@ def main():
 
         out.write(frame)
 
-    cap.release()
+    if cap is not None:
+        cap.release()
     out.release()
     # write JSON and CSV outputs
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
     json_out = os.path.splitext(output_path)[0] + '_tracks.json'
     csv_out = os.path.splitext(output_path)[0] + '_tracks.csv'
     try:
