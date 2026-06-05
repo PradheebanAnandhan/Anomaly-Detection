@@ -1,0 +1,16 @@
+# Ignore model binaries and data
+models/
+*.h5
+*.hdf5
+
+# Python
+__pycache__/
+*.pyc
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# Outputs
+outputs/
+output/
+*.mp4

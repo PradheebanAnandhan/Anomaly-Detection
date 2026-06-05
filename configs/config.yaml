@@ -1,0 +1,11 @@
+model:
+  lrcn: "models/LRCN_model.h5"
+  detector: "yolov8l-pose.pt"
+
+video:
+  input: "data/input.mp4"
+  output: "outputs/output.mp4"
+
+inference:
+  seq_len: 30
+  conf_threshold: 0.3
